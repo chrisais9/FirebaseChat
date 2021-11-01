@@ -11,6 +11,8 @@ import Firebase
 class FirebaseManager: NSObject {
     
     let auth: Auth
+    let storage: Storage
+    let firestore: Firestore
     
     static let shared = FirebaseManager()
     
@@ -18,6 +20,8 @@ class FirebaseManager: NSObject {
         FirebaseApp.configure()
         
         self.auth = Auth.auth()
+        self.storage = Storage.storage()
+        self.firestore = Firestore.firestore()
         
         super.init()
     }
@@ -28,6 +32,8 @@ struct LoginView: View {
     @State var isLoginMode = false
     @State var email = ""
     @State var password = ""
+    
+    @State var sholdShowImagePicker = false
     
     var body: some View {
         NavigationView {
@@ -44,11 +50,27 @@ struct LoginView: View {
                     
                     if !isLoginMode {
                         Button {
-                            
+                           sholdShowImagePicker
+                                .toggle()
                         } label: {
-                            Image(systemName: "person.fill")
-                                .font(.system(size: 64))
-                                .padding()
+                            VStack {
+                                if let image = self.image {
+                                    Image(uiImage: image)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: 128, height: 128)
+                                        .cornerRadius(64)
+                                } else {
+                                    Image(systemName: "person.fill")
+                                        .font(.system(size: 64))
+                                        .padding()
+                                        .foregroundColor(Color(.label))
+                                }
+                            }
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 64)
+                                    .stroke(.black, lineWidth: 3)
+                            )
                         }
                     }
                     
@@ -84,7 +106,12 @@ struct LoginView: View {
             .background(Color(.init(white: 0, alpha: 0.05)))
         }
         .navigationViewStyle(StackNavigationViewStyle())
+        .fullScreenCover(isPresented: $sholdShowImagePicker, onDismiss: nil) {
+            ImagePicker(image: $image)
+        }
     }
+    
+    @State var image: UIImage?
     
     private func handleAction() {
         if isLoginMode {
@@ -121,7 +148,52 @@ struct LoginView: View {
             print("Success created user: \(result?.user.uid ?? "")")
             
             self.loginStatusMessage = "Success created user: \(result?.user.uid ?? "")"
+            
+            self.persistImageToStorage()
         }
+    }
+    
+    private func persistImageToStorage() {
+        guard let uid = FirebaseManager.shared.auth.currentUser?.uid else { return }
+        let ref = FirebaseManager.shared.storage.reference(withPath: uid)
+        guard let imageData = self.image?.jpegData(compressionQuality: 0.5) else { return }
+        ref.putData(imageData, metadata: nil) { metadata, err in
+            if let err = err {
+                self.loginStatusMessage = "Failed to push image to Storage \(err)"
+                return
+            }
+            
+            ref.downloadURL { url, err in
+                if let err = err {
+                    self.loginStatusMessage = "Failed to retrieve download URL: \(err)"
+                    return
+                }
+                self.loginStatusMessage = "Successfully stored image with url: \(url?.absoluteString ?? "")"
+                print(url?.absoluteString ?? "")
+                
+                guard let url = url else { return }
+                storeUserInformation(imageProfileURL: url)
+            }
+        }
+    }
+    
+    private func storeUserInformation(imageProfileURL: URL) {
+        guard let uid = FirebaseManager.shared.auth.currentUser?.uid else { return }
+        let userData = [
+            "email": self.email,
+            "uid": uid,
+            "profileImageUrl": imageProfileURL.absoluteString
+        ]
+        FirebaseManager.shared.firestore.collection("users")
+            .document(uid).setData(userData) { err in
+                if let err = err {
+                    print(err)
+                    self.loginStatusMessage = "\(err)"
+                    return
+                }
+            }
+        print("Success")
+        
     }
 }
 
